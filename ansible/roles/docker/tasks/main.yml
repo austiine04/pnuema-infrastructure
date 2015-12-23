@@ -1,0 +1,54 @@
+---
+  - name: copy deploy key to server
+    copy: src=deploy_key dest=/home/ubuntu/.ssh/ owner=ubuntu group=ubuntu mode=0600
+
+  - name: install packages
+    apt: name={{ item }} state=present update_cache=yes
+    with_items:
+      - git
+      - python-pip
+
+  - name: install docker
+    shell: curl -sSL https://get.docker.com/ | sh
+    args:
+      creates: /usr/bin/docker
+    notify:
+      - start docker engine
+
+  - name: pip install docker-py
+    pip: name=docker-py version=1.5.0
+
+  - name: clone repo
+    git: repo=git@github.com:austiine04/pneuma.git
+         dest=/srv/checkout
+         key_file=/home/ubuntu/.ssh/deploy_key
+         accept_hostkey=True
+
+  - name: add .env file
+    template: src=env.j2 dest=/srv/checkout/.env owner=www-data mode=0744
+
+  - name: build docker image
+    docker_image: path=/srv/checkout name="pneuma/pneuma" state=build
+
+  - name: postgres data directory
+    file: path=/{{ item.0 }}/{{ item.1 }} state=directory
+    with_nested:
+      - ['data', 'data']
+      - ['db', 'log']
+
+  - name: start the new shiny container
+    docker:
+      name: pneuma
+      image: pneuma/pneuma
+      state: started
+      detach: True
+      ports:
+        - "80:80"
+      volumes:
+        - /data/db:/var/lib/postgresql
+        - /data/log:/var/log/postgresql
+      env:
+        DEPLOY_ENV: "{{ deployment_env }}"
+
+  - name: clean up the checkout directory
+    shell: rm -rf /srv/checkout
